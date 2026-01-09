@@ -178,6 +178,8 @@ rm web3-ethereum-defi-plain.env
 
 In your project repository, create `.local-test.env` (this file should be gitignored):
 
+**Standard method (age key on disk):**
+
 ```bash
 # Set SOPS age key location
 export SOPS_AGE_KEY_FILE=~/.age/key.txt
@@ -185,6 +187,24 @@ export SOPS_AGE_KEY_FILE=~/.age/key.txt
 # Decrypt and export all environment variables from encrypted file
 eval "$(SOPS_AGE_KEY_FILE=~/.age/key.txt sops --decrypt --input-type dotenv --output-type dotenv ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
 ```
+
+**Secure method (age key in KeePassXC only - RECOMMENDED):**
+
+```bash
+#!/bin/bash
+#
+# Secure .local-test.env - fetches age key from KeePassXC
+# You'll be prompted for your KeePassXC password once
+#
+
+# Decrypt and export all environment variables
+# Prompts for KeePassXC password, then loads secrets
+eval "$(load-secrets ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
+
+echo "✓ Secrets loaded from KeePassXC"
+```
+
+**Note:** The secure method requires the `load-secrets` wrapper script to be installed first (see section 6 below).
 
 ### 5. Backup age key to KeePassXC
 
@@ -217,7 +237,7 @@ cat > ~/.local/bin/load-secrets << 'EOF'
 #!/bin/bash
 #
 # Load encrypted secrets into environment variables
-# Fetches age key from KeePassXC on-the-fly
+# Priority: SOPS_AGE_KEY env var > SOPS_AGE_KEY_FILE > KeePassXC prompt
 #
 
 set -e
@@ -232,12 +252,35 @@ if [[ ! -f "$SECRETS_FILE" ]]; then
     exit 1
 fi
 
-# Create temporary file in memory
+# Priority 1: Check if SOPS_AGE_KEY is set (key content in env var)
+if [[ -n "$SOPS_AGE_KEY" ]]; then
+    echo "Using age key from SOPS_AGE_KEY environment variable" >&2
+    sops --decrypt --input-type dotenv --output-type dotenv "$SECRETS_FILE"
+    exit 0
+fi
+
+# Priority 2: Check if SOPS_AGE_KEY_FILE is set and file exists
+if [[ -n "$SOPS_AGE_KEY_FILE" && -f "$SOPS_AGE_KEY_FILE" ]]; then
+    echo "Using age key from SOPS_AGE_KEY_FILE: $SOPS_AGE_KEY_FILE" >&2
+    sops --decrypt --input-type dotenv --output-type dotenv "$SECRETS_FILE"
+    exit 0
+fi
+
+# Priority 3: Fall back to KeePassXC
+echo "Fetching age key from KeePassXC..." >&2
+
+# Check if KeePassXC database exists
+if [[ ! -f "$KEEPASS_DB" ]]; then
+    echo "Error: KeePassXC database not found at $KEEPASS_DB" >&2
+    echo "Set SOPS_AGE_KEY or SOPS_AGE_KEY_FILE environment variable, or create KeePassXC database" >&2
+    exit 1
+fi
+
+# Create temporary file
 TEMP_KEY=$(mktemp)
 trap "rm -f $TEMP_KEY" EXIT
 
-# Fetch age key from KeePassXC to temporary file
-# Password prompt will appear for KeePassXC database
+# Fetch age key from KeePassXC (prompts for password)
 keepassxc-cli attachment-export "$KEEPASS_DB" "$KEY_ENTRY" "age-key.txt" "$TEMP_KEY" >&2
 
 # Use the key to decrypt secrets
@@ -253,6 +296,18 @@ chmod +x ~/.local/bin/load-secrets
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+**Key lookup priority:**
+
+The `load-secrets` script checks for the age key in this order:
+1. `SOPS_AGE_KEY` environment variable (key content directly)
+2. `SOPS_AGE_KEY_FILE` environment variable (path to key file)
+3. KeePassXC database (prompts for password)
+
+This allows flexible usage:
+- **Local development:** No env vars set → prompts for KeePassXC password
+- **CI/CD pipelines:** Set `SOPS_AGE_KEY` secret → no prompt needed
+- **Shared servers:** Set `SOPS_AGE_KEY_FILE` → uses file without prompt
 
 **Create secure project template:**
 
@@ -431,30 +486,52 @@ Use the setup script:
    brew install age sops keepassxc-cli  # macOS
    ```
 
-2. **Restore age key from KeePassXC:**
+2. **Copy KeePassXC database and encrypted secrets:**
    ```bash
+   mkdir -p ~/.secrets/keepass
+   # Copy secrets.kdbx from backup
+   # Copy web3-ethereum-defi.env from backup
+   ```
+
+3. **Install load-secrets wrapper (for secure method):**
+   ```bash
+   mkdir -p ~/.local/bin
+   # Copy load-secrets script (see section 6 above)
+   chmod +x ~/.local/bin/load-secrets
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+
+4. **Configure project:**
+
+   **Standard method (extracts key to disk):**
+   ```bash
+   # First restore the age key
    mkdir -p ~/.age
    keepassxc-cli attachment-export ~/.secrets/keepass/secrets.kdbx \
      "SOPS-age-encryption-key" \
      "age-key.txt" \
      ~/.age/key.txt
    chmod 600 ~/.age/key.txt
+
+   # Then create .local-test.env
+   cd /path/to/project
+   cat > .local-test.env << 'EOF'
+   export SOPS_AGE_KEY_FILE=~/.age/key.txt
+   eval "$(SOPS_AGE_KEY_FILE=~/.age/key.txt sops --decrypt --input-type dotenv --output-type dotenv ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
+   EOF
    ```
 
-3. **Copy encrypted secrets file:**
+   **Secure method (key stays in KeePassXC - RECOMMENDED):**
    ```bash
-   mkdir -p ~/.secrets
-   # Copy from backup or git clone
+   cd /path/to/project
+   cat > .local-test.env << 'EOF'
+   #!/bin/bash
+   # Secure .local-test.env - prompts for KeePassXC password
+   eval "$(load-secrets ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
+   echo "✓ Secrets loaded from KeePassXC"
+   EOF
    ```
-
-4. **Configure project:**
-  ```bash
-  cd /path/to/project
-  cat > .local-test.env << 'EOF' 
-  export SOPS_AGE_KEY_FILE=~/.age/key.txt
-  eval "$(SOPS_AGE_KEY_FILE=~/.age/key.txt sops --decrypt --input-type dotenv --output-type dotenv ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
-  EOF
-  ```
 
 5. **Test:**
    ```bash
