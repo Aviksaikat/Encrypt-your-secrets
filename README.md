@@ -11,7 +11,29 @@ This setup allows you to:
 - Backup encryption keys securely in KeePassXC
 - Version control encrypted files safely (optional)
 
+## Setup Methods
+
+This guide offers two approaches:
+
+### Standard Method (Easier)
+- Age key stored at `~/.age/key.txt`
+- Quick setup, simpler workflow
+- Good for: personal projects, single-user systems
+- Security: Key is backed up in KeePassXC but also on disk
+
+### Enhanced Security Method (Recommended for sensitive data)
+- Age key stored **only** in encrypted KeePassXC database
+- Key never touches disk in plaintext
+- Requires KeePassXC password to decrypt secrets
+- Good for: shared systems, sensitive projects, compliance requirements
+- Security: Maximum protection - key exists only encrypted at rest
+
+**Choose the standard method** if you want simplicity and are the only user.
+**Choose the enhanced method** if your system might be compromised or you need defense-in-depth.
+
 ## Architecture
+
+### Standard Setup (Age key on disk)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -33,6 +55,31 @@ This setup allows you to:
                                   │ Runtime: decrypted   │
                                   │ env vars in memory   │
                                   └──────────────────────┘
+```
+
+### Enhanced Security Setup (Age key in KeePassXC only)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ KeePassXC Database                                       │
+│ ~/.secrets/keepass/secrets.kdbx                          │
+│ Contains: age encryption key (encrypted at rest)         │
+└─────────────┬────────────────────────────────────────────┘
+              │
+              │ load-secrets script fetches key
+              │ (prompts for password)
+              ▼
+┌──────────────────────────┐         ┌──────────────────────┐
+│ Temporary key in memory  │────────>│ ~/.secrets/          │
+│ (auto-deleted after use) │ decrypt │ web3-ethereum-defi   │
+└──────────────────────────┘         │ .env (encrypted)     │
+                                     └──────────────────────┘
+                                              │
+                                              ▼
+                                     ┌──────────────────────┐
+                                     │ Runtime: decrypted   │
+                                     │ env vars in memory   │
+                                     └──────────────────────┘
 ```
 
 ## Tools required
@@ -74,9 +121,11 @@ cat ~/.age/key.txt
 **Output example:**
 ```
 # created: 2026-01-09T11:40:37+05:30
-# public key: age12ezrg2zd654krydl73lnu78sz0pcpkuvj3vwwz3dyef62c2fmynqjesdvv
-AGE-SECRET-KEY-1Q5V957WLTUV5GDXG55R6QQ7AH3SLDSPCF3Z77P2SWPGHJ4ZHJFPQSGGK0S
+# public key: age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+AGE-SECRET-KEY-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ```
+
+**⚠️ SECURITY WARNING:** Never commit or share your actual age key! The example above shows placeholder values only.
 
 ### 2. Configure SOPS to use age
 
@@ -87,11 +136,11 @@ mkdir -p ~/.secrets
 # Create SOPS configuration
 cat > ~/.secrets/.sops.yaml << 'EOF'
 creation_rules:
-  - age: age12ezrg2zd654krydl73lnu78sz0pcpkuvj3vwwz3dyef62c2fmynqjesdvv
+  - age: age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 EOF
 ```
 
-**Important:** Replace the public key with your actual public key from step 1.
+**Important:** Replace `age1xxx...` with your actual public key from step 1.
 
 ### 3. Create encrypted secrets file
 
@@ -153,9 +202,96 @@ keepassxc-cli attachment-import ~/.secrets/keepass/secrets.kdbx \
 
 This stores the age key as an attachment in your KeePassXC database under the entry "SOPS-age-encryption-key".
 
+### 6. (Optional) Enhanced Security: Remove plaintext age key from disk
+
+For maximum security, you can configure your system to fetch the age key from KeePassXC on-demand instead of storing it on disk. This prevents the key from being exposed if your disk is compromised.
+
+**Create secure wrapper script:**
+
+```bash
+# Create wrapper script directory
+mkdir -p ~/.local/bin
+
+# Create load-secrets wrapper
+cat > ~/.local/bin/load-secrets << 'EOF'
+#!/bin/bash
+#
+# Load encrypted secrets into environment variables
+# Fetches age key from KeePassXC on-the-fly
+#
+
+set -e
+
+KEEPASS_DB="$HOME/.secrets/keepass/secrets.kdbx"
+KEY_ENTRY="SOPS-age-encryption-key"
+SECRETS_FILE="${1:-$HOME/.secrets/web3-ethereum-defi.env}"
+
+# Check if secrets file exists
+if [[ ! -f "$SECRETS_FILE" ]]; then
+    echo "Error: Secrets file not found at $SECRETS_FILE" >&2
+    exit 1
+fi
+
+# Create temporary file in memory
+TEMP_KEY=$(mktemp)
+trap "rm -f $TEMP_KEY" EXIT
+
+# Fetch age key from KeePassXC to temporary file
+# Password prompt will appear for KeePassXC database
+keepassxc-cli attachment-export "$KEEPASS_DB" "$KEY_ENTRY" "age-key.txt" "$TEMP_KEY" >&2
+
+# Use the key to decrypt secrets
+export SOPS_AGE_KEY_FILE="$TEMP_KEY"
+sops --decrypt --input-type dotenv --output-type dotenv "$SECRETS_FILE"
+
+# Cleanup happens automatically via trap
+EOF
+
+chmod +x ~/.local/bin/load-secrets
+
+# Add to PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Create secure project template:**
+
+```bash
+cat > ~/sops-project-template-secure.env << 'EOF'
+#!/bin/bash
+#
+# Secure SOPS project template
+# Age key is fetched from KeePassXC on-the-fly and cleaned up automatically
+#
+
+# Decrypt and export all environment variables
+# You'll be prompted for KeePassXC password once
+eval "$(load-secrets ~/.secrets/web3-ethereum-defi.env | sed 's/^/export /')"
+
+echo "✓ Secrets loaded from KeePassXC"
+EOF
+
+chmod +x ~/sops-project-template-secure.env
+```
+
+**Remove plaintext age key from disk (ONLY after confirming wrappers work):**
+
+```bash
+# Test the wrapper first
+load-secrets ~/.secrets/web3-ethereum-defi.env | head -n 5
+
+# If it works, remove the plaintext key
+rm -P ~/.age/key.txt  # macOS
+# or: shred -u ~/.age/key.txt  # Linux
+
+echo "✓ Plaintext age key removed - now only exists in KeePassXC"
+```
+
 ## Daily usage
 
 ### Using secrets in projects
+
+**Standard method (age key on disk):**
 
 ```bash
 # Source the environment file
@@ -167,6 +303,21 @@ poetry run python script.py
 # Or combine them
 source .local-test.env && poetry run pytest tests/
 ```
+
+**Secure method (age key in KeePassXC only):**
+
+```bash
+# Option A: Source the secure template
+source ~/sops-project-template-secure.env && poetry run python script.py
+
+# Option B: Load secrets directly
+eval "$(load-secrets)" && poetry run python script.py
+
+# Option C: View secrets only
+load-secrets ~/.secrets/web3-ethereum-defi.env
+```
+
+You'll be prompted for your KeePassXC password once, then secrets are available for the session.
 
 ### Editing encrypted secrets
 
@@ -182,10 +333,19 @@ The file will be decrypted in memory, opened in your editor, and re-encrypted wh
 
 ### Viewing encrypted secrets
 
+**Standard method (age key on disk):**
+
 ```bash
 # Decrypt and view (without editing)
 export SOPS_AGE_KEY_FILE=~/.age/key.txt
 sops --decrypt ~/.secrets/web3-ethereum-defi.env
+```
+
+**Secure method (age key in KeePassXC only):**
+
+```bash
+# View secrets (prompts for KeePassXC password)
+load-secrets ~/.secrets/web3-ethereum-defi.env
 ```
 
 ### Adding new secrets
@@ -307,12 +467,31 @@ Use the setup script:
 ### File permissions
 
 ```bash
-# Restrict access to age key
+# Restrict access to age key (if using standard method)
 chmod 600 ~/.age/key.txt
 
 # Restrict access to KeePassXC database
 chmod 600 ~/.secrets/keepass/secrets.kdbx
+
+# Restrict access to wrapper scripts
+chmod 700 ~/.local/bin/load-secrets
 ```
+
+### Enhanced security with KeePassXC-only workflow
+
+For maximum security, remove the plaintext age key from disk entirely:
+
+**Benefits:**
+- Age key only exists encrypted in KeePassXC
+- Malware cannot steal plaintext key from disk
+- Disk backups don't contain unencrypted keys
+- Single password protects all secrets
+
+**How to enable:**
+1. Set up the `load-secrets` wrapper script (see section 6 above)
+2. Test that it works: `load-secrets ~/.secrets/web3-ethereum-defi.env`
+3. Remove plaintext key: `rm -P ~/.age/key.txt` (macOS) or `shred -u ~/.age/key.txt` (Linux)
+4. Use `load-secrets` or the secure project template for all operations
 
 ### gitignore patterns
 
@@ -374,6 +553,7 @@ Ensure you're entering the correct master password for your KeePassXC database.
 
 ### Decryption fails
 
+**Standard method:**
 Verify your age key is correct:
 
 ```bash
@@ -381,15 +561,40 @@ cat ~/.age/key.txt
 # Should show the age secret key
 ```
 
+**Secure method:**
+Verify the key is in KeePassXC:
+
+```bash
+keepassxc-cli attachment-export ~/.secrets/keepass/secrets.kdbx \
+  "SOPS-age-encryption-key" \
+  "age-key.txt" \
+  /dev/stdout
+```
+
+### "load-secrets: command not found"
+
+The wrapper script directory isn't in your PATH:
+
+```bash
+# Add to PATH temporarily
+export PATH="$HOME/.local/bin:$PATH"
+
+# Add permanently
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
 ## File locations reference
 
 | File | Location | Purpose | Backup? |
 |------|----------|---------|---------|
-| Age key | `~/.age/key.txt` | Encryption key | ✅ In KeePassXC |
+| Age key | `~/.age/key.txt` | Encryption key (standard method) | ✅ In KeePassXC |
 | SOPS config | `~/.secrets/.sops.yaml` | SOPS settings | ✅ Optional |
 | Encrypted secrets | `~/.secrets/web3-ethereum-defi.env` | Encrypted env vars | ✅ Yes |
-| KeePassXC DB | `~/.secrets/keepass/secrets.kdbx` | Key backup | ✅ Yes |
-| Project loader | `.local-test.env` | Per-project file | ❌ Gitignored |
+| KeePassXC DB | `~/.secrets/keepass/secrets.kdbx` | Key backup (encrypted) | ✅ Yes |
+| Project loader | `.local-test.env` | Per-project file (standard) | ❌ Gitignored |
+| Secure loader | `~/.local/bin/load-secrets` | Wrapper script (secure method) | ✅ Optional |
+| Secure template | `~/sops-project-template-secure.env` | Secure project template | ✅ Optional |
 
 ## Additional resources
 
@@ -400,4 +605,9 @@ cat ~/.age/key.txt
 
 ## Changelog
 
-- **2026-01-09**: Initial setup with SOPS + age + KeePassXC
+- **2026-01-09**:
+  - Initial setup with SOPS + age + KeePassXC
+  - Added enhanced security workflow using `load-secrets` wrapper
+  - Age key can now be stored exclusively in KeePassXC (never on disk)
+  - Replaced exposed example keys with placeholder values
+  - Updated documentation with both standard and secure workflows
