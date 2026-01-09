@@ -37,9 +37,11 @@ This setup allows you to:
 
 ## Tools required
 
-- **age**: Modern encryption tool
-- **sops**: Secrets management tool by Mozilla
-- **keepassxc-cli**: KeePassXC command-line interface for key backup
+- **[age](https://github.com/FiloSottile/age)**: A simple, modern, and secure file encryption tool, format, and Go library. age uses ChaCha20-Poly1305 for encryption and provides a simple command-line interface for encrypting and decrypting files with small explicit keys.
+
+- **[sops](https://github.com/mozilla/sops)**: Secrets OPerationS (SOPS) is an editor of encrypted files that supports YAML, JSON, ENV, INI and BINARY formats and encrypts with AWS KMS, GCP KMS, Azure Key Vault, age, and PGP. SOPS allows you to encrypt only the values in your files while keeping the keys in plaintext, making it ideal for version control.
+
+- **[keepassxc-cli](https://github.com/keepassxreboot/keepassxc)**: Command-line interface for KeePassXC, a cross-platform password manager. Used here to securely backup and restore the age encryption key as an attachment in an encrypted KeePassXC database.
 
 ## Installation
 
@@ -391,9 +393,10 @@ cat ~/.age/key.txt
 
 ## Additional resources
 
-- [SOPS Documentation](https://github.com/mozilla/sops)
-- [age Documentation](https://github.com/FiloSottile/age)
-- [KeePassXC Documentation](https://keepassxc.org/docs/)
+- [SOPS GitHub Repository & Documentation](https://github.com/mozilla/sops)
+- [age GitHub Repository & Documentation](https://github.com/FiloSottile/age)
+- [KeePassXC GitHub Repository](https://github.com/keepassxreboot/keepassxc)
+- [KeePassXC Official Documentation](https://keepassxc.org/docs/)
 
 ## Changelog
 

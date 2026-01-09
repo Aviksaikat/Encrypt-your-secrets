@@ -1,5 +1,14 @@
 # Quick start guide
 
+## About the tools
+
+This setup uses three main tools:
+- **[age](https://github.com/FiloSottile/age)** - Modern file encryption
+- **[sops](https://github.com/mozilla/sops)** - Secrets management by Mozilla
+- **[keepassxc-cli](https://github.com/keepassxreboot/keepassxc)** - Password manager CLI
+
+See [README.md](README.md) for detailed descriptions.
+
 ## TL;DR - Common commands
 
 ### Edit secrets
